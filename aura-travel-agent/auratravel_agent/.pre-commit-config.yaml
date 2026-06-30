@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      - id: end-of-file-fixer
+        name: Fix End of Files
+        entry: aura-travel-agent\\.venv\\Scripts\\python.exe -m pre_commit_hooks.end_of_file_fixer
+        language: system
+        types: [text]
+      - id: trailing-whitespace
+        name: Trim Trailing Whitespace
+        entry: aura-travel-agent\\.venv\\Scripts\\python.exe -m pre_commit_hooks.trailing_whitespace_fixer
+        language: system
+        types: [text]
+      - id: semgrep
+        name: Semgrep Scan
+        entry: wsl env PATH=/home/nirma/.local/bin:/usr/bin:/bin python3 /home/nirma/.local/bin/semgrep scan --error --config aura-travel-agent/auratravel_agent/.semgrep/rules.yaml
+        language: system
+        types: [python]
