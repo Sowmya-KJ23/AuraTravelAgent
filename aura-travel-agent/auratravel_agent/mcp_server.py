@@ -1,3 +1,4 @@
+import sys
 from mcp.server.fastmcp import FastMCP
 
 # Create FastMCP server
@@ -211,6 +212,7 @@ RESTAURANTS_DATABASE = {
 
 @mcp.tool()
 def get_weather_forecast(destination: str, season_or_month: str) -> dict:
+    print(f"DEBUG TOOL CALL: get_weather_forecast({destination=}, {season_or_month=})", file=sys.stderr, flush=True)
     """Retrieves the weather forecast and popular activities for a destination during a specific season or month.
 
     Args:
@@ -264,6 +266,7 @@ def get_weather_forecast(destination: str, season_or_month: str) -> dict:
 
 @mcp.tool()
 def get_flight_options(destination: str) -> dict:
+    print(f"DEBUG TOOL CALL: get_flight_options({destination=})", file=sys.stderr, flush=True)
     """Retrieves list of flight options to a destination.
 
     Args:
@@ -291,6 +294,7 @@ def get_flight_options(destination: str) -> dict:
 
 @mcp.tool()
 def get_hotel_options(destination: str, budget_level: str) -> dict:
+    print(f"DEBUG TOOL CALL: get_hotel_options({destination=}, {budget_level=})", file=sys.stderr, flush=True)
     """Retrieves hotel suggestions based on destination and budget level.
 
     Args:
@@ -317,6 +321,7 @@ def get_hotel_options(destination: str, budget_level: str) -> dict:
 
 @mcp.tool()
 def get_restaurant_suggestions(destination: str) -> dict:
+    print(f"DEBUG TOOL CALL: get_restaurant_suggestions({destination=})", file=sys.stderr, flush=True)
     """Retrieves top restaurant suggestions for a destination.
 
     Args:

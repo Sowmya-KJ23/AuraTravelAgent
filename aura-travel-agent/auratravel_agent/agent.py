@@ -31,7 +31,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
 from google.genai import types
 
-from auratravel_agent.config import MODEL_NAME
+from .config import MODEL_NAME
 
 # Load environment variables from .env
 load_dotenv()
@@ -58,7 +58,12 @@ else:
 # Initialize standard Gemini Model Client
 llm = Gemini(
     model=MODEL_NAME,
-    retry_options=types.HttpRetryOptions(attempts=3),
+    retry_options=types.HttpRetryOptions(
+        attempts=6,
+        initial_delay=15.0,
+        max_delay=60.0,
+        http_status_codes=[408, 429, 500, 502, 503, 504],
+    ),
 )
 
 # -------------------------------------------------------------------------
@@ -232,7 +237,6 @@ async def init_trip_state(callback_context: CallbackContext) -> None:
 # -------------------------------------------------------------------------
 
 # Node 1: Parse Input (LlmAgent)
-# Node 1: Parse Input (LlmAgent)
 parse_input = LlmAgent(
     name="parse_input",
     model=llm,
@@ -241,9 +245,10 @@ parse_input = LlmAgent(
 
     1. EXCLUSIVELY output a JSON object adhering to the schema.
     2. PRIVACY/SECURITY RULE: Scrub any Personally Identifiable Information (PII) like real names, passport numbers, email addresses, phone numbers, or physical addresses. Replace them with generic placeholders like [TRAVELER_1].
-    3. If the user's query is a follow-up (e.g. asking for hotel bookings, flights, cost calculations, or restaurant suggestions) and destination/dates are not mentioned, refer to the existing trip details in the state and fill in the missing details from there.
-    4. Determine if the information is complete enough to proceed. You need at least a destination and a travel season/month to suggest weather and destinations. If complete, set is_complete=True.
-    5. If is_complete is False, generate a polite clarification message in clarification_message asking for the missing details.
+    3. Merge the newly provided information with the existing trip details in the state. If a value (like destination or travel month) is already known in the state and not contradicted or updated by the new user query, PRESERVE it in the output instead of resetting it to 'unknown'.
+    4. If the user's query is a follow-up (e.g. asking for hotel bookings, flights, cost calculations, or restaurant suggestions) and destination/dates are not mentioned, refer to the existing trip details in the state and fill in the missing details from there.
+    5. Determine if the information is complete enough to proceed. You need at least a destination and a travel season/month to suggest weather and destinations. If complete, set is_complete=True.
+    6. If is_complete is False, generate a polite clarification message in clarification_message asking for the missing details.
     """,
     instruction="Existing trip details in state: {trip_details}",
     output_schema=ParsedTripInfo,
@@ -279,6 +284,12 @@ async def parse_input_node(ctx: Context) -> Event:
 # Node 2: Check completeness & router (FunctionNode)
 def check_trip_completeness(ctx: Context, node_input: dict) -> Event:
     """Checks if the parsed trip info is complete and routes accordingly."""
+    # Get previous details before updating them to check for weather updates
+    prev_details = ctx.state.get("trip_details", {})
+
+    # Save the parsed details to state (even if incomplete, to persist progress)
+    ctx.state["trip_details"] = node_input
+
     is_complete = node_input.get("is_complete", False)
 
     if not is_complete:
@@ -289,18 +300,20 @@ def check_trip_completeness(ctx: Context, node_input: dict) -> Event:
         return Event(output=clarification, actions={"route": "clarify"})
 
     # Check if we already have weather analysis for this destination to avoid duplicate API calls
-    prev_details = ctx.state.get("trip_details", {})
     prev_dest = prev_details.get("destination", "").lower().strip()
     new_dest = node_input.get("destination", "").lower().strip()
+
+    prev_duration = prev_details.get("duration_days", 0)
+    new_duration = node_input.get("duration_days", 0)
+
+    prev_budget = prev_details.get("budget_level", "").lower().strip()
+    new_budget = node_input.get("budget_level", "").lower().strip()
 
     has_weather = (
         ctx.state.get("weather_analysis", {}).get("destination", "unknown") != "unknown"
     )
 
-    # Save the new details to state
-    ctx.state["trip_details"] = node_input
-
-    if has_weather and prev_dest == new_dest:
+    if has_weather and prev_dest == new_dest and prev_duration == new_duration and prev_budget == new_budget:
         return Event(
             output=ctx.state["weather_analysis"],
             actions={"route": "skip_weather"},
@@ -320,28 +333,49 @@ def ask_clarification(node_input: str):
     yield Event(output=node_input)
 
 
-# Node 4: Analyze Weather & Seasonal popularity (LlmAgent)
-weather_season_analyzer = LlmAgent(
-    name="weather_season_analyzer",
+# Node 4: Structure Weather Analysis (LlmAgent - schema only, no tools)
+weather_structurer = LlmAgent(
+    name="weather_structurer",
     model=llm,
-    static_instruction="""You are a weather and seasonal travel analyst.
-    Your task is to check the weather forecast and popular activities for the destination.
-    Look up the weather using the get_weather_forecast tool for the destination and season/month.
-    Then, analyze how this weather affects the traveler demographics.
-    Provide structural recommendations in the output schema.
+    static_instruction="""You are a seasonal travel and weather analyst assistant.
+    Your task is to take the provided destination weather forecast data and analyze how it affects the traveler demographics (such as age, count, budget).
+    Recommend seasonal attractions/visits and demographic-aware travel tips based on this weather and season.
+    Provide your analysis in the required structured output schema.
     """,
-    instruction="Trip parameters in state: {trip_details}",
-    tools=[weather_toolset],
+    instruction="Weather data: {weather_data}\nTrip details: {trip_details}",
     output_schema=WeatherAnalysis,
     output_key="weather_analysis",
 )
 
 
-# Programmatic Wrapper Node 4: Weather Season Analyzer (Executed Silently)
+# Programmatic Node 4: Weather Season Analyzer (Executed Silently)
 async def weather_season_analyzer_node(ctx: Context, node_input: dict) -> Event:
-    """Runs the weather_season_analyzer agent internally without streaming output."""
+    """Runs the weather season lookup programmatically using Python and then structures the analysis."""
+    from .mcp_server import get_weather_forecast
+
+    # 1. Retrieve trip details from state
+    trip_details = ctx.state.get("trip_details", {})
+    destination = trip_details.get("destination", "unknown")
+    season = trip_details.get("season_or_month", "unknown")
+
+    # 2. Call the weather lookup tool directly in Python
+    try:
+        weather_report = get_weather_forecast(destination=destination, season_or_month=season)
+    except Exception:
+        # Fallback if lookup fails
+        weather_report = {
+            "destination": destination,
+            "season_determined": season,
+            "weather_summary": "Mild and variable weather forecast.",
+            "popular_visits": ["Local sights", "Museums", "Parks"]
+        }
+
+    # Store weather_data in session state so it can be resolved by instructions templates
+    ctx.state["weather_data"] = weather_report
+
+    # 3. Analyze and structure the output using the schema-only weather_structurer
     weather_info = None
-    async for event in weather_season_analyzer.run(ctx=ctx, node_input=node_input):
+    async for event in weather_structurer.run(ctx=ctx, node_input=node_input):
         if event.output is not None:
             weather_info = event.output
 
@@ -366,16 +400,58 @@ itinerary_generator = LlmAgent(
        - Monuments details & famous places: Include historical context, cultural/architectural significance, opening hours, or ticketing tips for the sights in the itinerary.
        - Local Spas & Wellness: Recommend local spas, wellness retreats, traditional public baths (such as Onsens in Tokyo, traditional baths in Paris, or wellness spas in New York) for relaxation.
        - Tourist Scams & Safety Alerts: Highlight common scams, tourist traps, or safety tips for the locations (e.g., petition scams, pickpocket hotspots, fake ticket sellers) so they travel safely.
-    3. ON-DEMAND TOOL CALLING RULE: Only invoke the booking tools (`get_flight_options`, `get_hotel_options`, `get_restaurant_suggestions`) on-demand when the user explicitly requests that type of information in their input (e.g. by using keywords like 'flight', 'ticket', 'hotel', 'stay', 'accommodation', 'restaurant', 'eat', 'food', 'dining', etc. in their query).
-       - Do NOT call these tools on the initial itinerary request unless the user's initial query explicitly asks for them.
-       - Inform the user that they can request flight options, hotel suggestions, restaurant recommendations, or total trip cost calculations.
-    4. If the user wants to calculate the total cost of the trip, invoke the calculate_total_trip_cost tool using values retrieved from the other tools or based on user input.
+
+    3. STRICT ON-DEMAND TOOL LIMITS (VERY IMPORTANT):
+       - Flight Tool (`get_flight_options`): Invoke this tool ONLY if the user's current query explicitly asks for flight information, tickets, or flight details. Under no other circumstances should this tool be called.
+       - Hotel Tool (`get_hotel_options`): Invoke this tool ONLY if the user's current query explicitly asks for hotel options, lodging, accommodation, or places to stay. Under no other circumstances should this tool be called.
+       - Restaurant Tool (`get_restaurant_suggestions`): Invoke this tool ONLY if the user's current query explicitly asks for restaurant suggestions, food recommendations, or dining options. Under no other circumstances should this tool be called.
+       - Cost Calculator Tool (`calculate_total_trip_cost`): Invoke this tool ONLY if the user explicitly requests a price calculation, cost estimate, budget sum, or total trip cost.
+         * When calling `calculate_total_trip_cost`, do NOT execute the other booking tools (flights, hotels, restaurants) to find details unless the user explicitly requested those specific details in the same query.
+         * If the user only requests the total cost but hasn't requested or specified flight details, set `flight_cost` to 0 or use values specified in their query (do not lookup flights). The same applies to hotel and food costs.
+         * Calculate and show only the costs of the components the user explicitly requested or specified.
+       - DO NOT call any tool that has not been explicitly requested by the user. If the user asks for only one detail (e.g., flights), run ONLY the flight tool and do not run hotels or restaurants tools.
+       - Never print raw JSON structures, Python dictionaries, code blocks containing raw JSON, or raw tool inputs/outputs. Present all information (such as flight options, hotel suggestions, or cost calculations) in a beautifully written, user-friendly markdown format.
+
+    4. HANDLING FOLLOW-UP REQUESTS (VERY IMPORTANT):
+       - If the user's latest query is a follow-up request (e.g., asking about flight options, hotel bookings, restaurant recommendations, cost calculations, or updates to the previous plan), focus ENTIRELY on answering that specific request.
+       - Do NOT regenerate or print the entire day-by-day itinerary again unless the user explicitly asks for a revised itinerary or a new plan.
+       - Use the appropriate tools on-demand (subject to the on-demand tool limits in Section 3) to retrieve the requested information, and present the answers directly and concisely.
+       - If the user asks for flight costs or details to a broad list of countries or region (e.g. "Netherlands, France, Germany") without specifying a city, select a primary city/airport in one of those destinations (e.g., Paris or Amsterdam) as a sensible starting point to retrieve flight options. Explain this assumption clearly to the user.
+
     5. Always be polite, creative, and structured.
     """,
     instruction="Weather analysis: {weather_analysis}\nTrip details in state: {trip_details}",
     tools=[booking_toolset, cost_tool],
     output_key="itinerary",
 )
+
+# Node 6: Follow-up Assistant (LlmAgent for Turn 2+ requests)
+followup_assistant = LlmAgent(
+    name="followup_assistant",
+    model=llm,
+    static_instruction="""You are a helpful, professional, and proactive travel planning assistant.
+    Your task is to assist the traveler with follow-up requests regarding their planned trip (such as flight booking options, hotel choices, restaurant suggestions, or calculating the total trip cost).
+
+    Role & Instructions:
+    1. Focus ENTIRELY on answering the user's specific request. Do NOT regenerate or print the day-by-day itinerary under any circumstances.
+    2. Use the appropriate tools on-demand (subject to the on-demand tool limits in Section 3) to retrieve the requested information, and present the answers directly and concisely.
+    3. If the user asks for flight costs or details to a broad list of countries or region (e.g. "Netherlands, France, Germany") without specifying a city, select a primary city/airport in one of those destinations (e.g., Paris or Amsterdam) as a sensible starting point to retrieve flight options. Explain this assumption clearly to the user.
+    4. Present all details in a beautifully formatted markdown response. Never print raw JSON or python dictionaries.
+
+    STRICT ON-DEMAND TOOL LIMITS:
+    - Flight Tool (`get_flight_options`): Invoke this tool ONLY if the user's current query explicitly asks for flight information, tickets, or flight details. Under no other circumstances should this tool be called.
+    - Hotel Tool (`get_hotel_options`): Invoke this tool ONLY if the user's current query explicitly asks for hotel options, lodging, accommodation, or places to stay. Under no other circumstances should this tool be called.
+    - Restaurant Tool (`get_restaurant_suggestions`): Invoke this tool ONLY if the user's current query explicitly asks for restaurant suggestions, food recommendations, or dining options. Under no other circumstances should this tool be called.
+    - Cost Calculator Tool (`calculate_total_trip_cost`): Invoke this tool ONLY if the user explicitly requests a price calculation, cost estimate, budget sum, or total trip cost.
+      * When calling `calculate_total_trip_cost`, do NOT execute the other booking tools (flights, hotels, restaurants) to find details unless the user explicitly requested those specific details in the same query.
+      * If the user only requests the total cost but hasn't requested or specified flight details, set `flight_cost` to 0 or use values specified in their query (do not lookup flights). The same applies to hotel and food costs.
+      * Calculate and show only the costs of the components the user explicitly requested or specified.
+    - DO NOT call any tool that has not been explicitly requested by the user. If the user asks for only one detail (e.g., flights), run ONLY the flight tool and do not run hotels or restaurants tools.
+    """,
+    instruction="Trip details in state: {trip_details}\nWeather analysis: {weather_analysis}",
+    tools=[booking_toolset, cost_tool],
+)
+
 
 # -------------------------------------------------------------------------
 # Workflow Configuration & Registration
@@ -390,7 +466,7 @@ edges = [
         {
             "clarify": ask_clarification,
             "ready": weather_season_analyzer_node,
-            "skip_weather": itinerary_generator,
+            "skip_weather": followup_assistant,
         },
     ),
     (weather_season_analyzer_node, itinerary_generator),
