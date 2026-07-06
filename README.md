@@ -70,6 +70,9 @@ uv venv
 
 :: Activate your new local environment sandbox shell
 .venv\Scripts\activate (optional)
+
+# On macOS / Linux / Git Bash:
+source .venv/bin/activate
 ```
 *(Once successfully run, a small `(.venv)` tag indicator will appear at the front of your command prompt text path line).*
 
@@ -93,8 +96,11 @@ Depending on your exact development focus, you can execute one of two commands t
 Fetch your free developer tier access token from Google AI Studio and configure it as an environment variable in your session. 
 
 *🚨 **Critical Window CMD Warning**: Do not wrap your API token inside string quotation marks (`" "`) or include trailing white-spaces, as Windows will pass those literal characters directly to the model authentication header, triggering an invalid signature client rejection error.*
+```bash
+# On Linux/macOS:
+export GEMINI_API_KEY="your_free_ai_studio_api_key"
 
-```cmd
+# On windows (command prompt):
 set GEMINI_API_KEY=AIza....
 ```
 
