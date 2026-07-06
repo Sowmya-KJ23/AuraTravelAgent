@@ -7,31 +7,8 @@ Furthermore, standard single-prompt LLM architectures are prone to basic arithme
 
 ## ⚙️ Multi-Agent Graph Architecture
 AuraTravel addresses these challenges by decommissioning cognitive processing into isolated `LlmAgent` nodes managed by an explicit execution pipeline:
-                       [ START ]
-                           │
-                           ▼
-                 [ parse_input_node ]
-                           │
-                           ▼
-             🔶 check_trip_completeness
-              /            │           \
-             /             │            \
-     (clarify)          (ready)     (skip_weather)
-           /               │              \
-          ▼                ▼               ▼
-[ ask_clarification ]  [ weather_season_ ] [ followup_assistant ]
-          │            [ _analyzer_node  ]         │
-          │                │                       │
-          │                ▼                       │
-          │         [ itinerary_ ]                 │
-          │         [ _generator ]                 │
-          \                │                       /
-           \               ▼                      /
-            ───────►    [ END ]    ◄──────────────
-                           ▲
-                           : (Dashed Tool Bindings)
-                           :
-             ⚙️ McpToolset & 🛠️ cost_calculator
+                   <img width="1350" height="1295" alt="image" src="https://github.com/user-attachments/assets/5cd1af33-4421-4ff3-b488-6e40e018282c" />
+
 
 ### 🧠 Core Nodes & Graph Logic
 *   **`parse_input_node`**: Ingests raw text, maps parameters to a structured Pydantic schema, and strips out private data profiles (replacing explicit inputs with `[TRAVELER_1]` tokens).
