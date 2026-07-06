@@ -30,8 +30,10 @@ from auratravel_agent.app_utils.telemetry import setup_telemetry
 from auratravel_agent.app_utils.typing import Feedback
 
 load_dotenv()
-setup_telemetry()
-_, project_id = google.auth.default()
+#setup_telemetry()
+#_, project_id = google.auth.default()
+project_id = "local-sandbox-project"
+
 logging_client = google_cloud_logging.Client()
 logger = logging_client.logger(__name__)
 allow_origins = (
