@@ -7,7 +7,8 @@ Furthermore, standard single-prompt LLM architectures are prone to basic arithme
 
 ## ⚙️ Multi-Agent Graph Architecture
 AuraTravel addresses these challenges by decommissioning cognitive processing into isolated `LlmAgent` nodes managed by an explicit execution pipeline:
-                   <img width="1350" height="1295" alt="image" src="https://github.com/user-attachments/assets/5cd1af33-4421-4ff3-b488-6e40e018282c" />
+<img width="1350" height="1295" alt="image" src="https://github.com/user-attachments/assets/80797ef9-04f7-40fc-a3fa-0ca1dcc7d434" />
+
 
 
 ### 🧠 Core Nodes & Graph Logic
