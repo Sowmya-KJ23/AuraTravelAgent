@@ -101,7 +101,7 @@ Fetch your free developer tier access token from Google AI Studio and configure 
 export GEMINI_API_KEY="your_free_ai_studio_api_key"
 
 # On windows (command prompt):
-set GEMINI_API_KEY=AIza....
+set GEMINI_API_KEY=your_free_ai_studio_api_key
 ```
 
 ### 5. Launch the Visual ADK Workspace Dashboard
